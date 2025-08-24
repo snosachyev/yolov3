@@ -1,0 +1,8 @@
+*.jpg
+.env
+log*
+*.zip
+__pycache__*
+.ipynb_checkpoints*
+checkpoints
+chess_yolo
