@@ -1,15 +1,15 @@
-import os
-
-import numpy as np
-
 import cv2
-
-# Работаем с фреймворком Keras и Tensorflow
+import glob
+import numpy as np
 import tensorflow as tf
+import os
+import random
+
+from cProfile import label
 
 import settings
 
-from PIL import Imageпше
+from PIL import Image, ImageDraw, ImageFont
 
 
 # функции для загрузки данных
@@ -209,57 +209,6 @@ def transform_targets_for_output(y_true, grid_size, anchor_idxs, classes):
         y_true_out, indexes.stack(), updates.stack())
 
 
-# Функции детекции объектов и отображения предсказанной рамки
-def draw_outputs(img, outputs, class_names, white_list=None):
-    boxes, score, classes, nums = outputs  # распознанные объекты
-    boxes, score, classes, nums = boxes[0], score[0], classes[0], nums[0]
-    wh = np.flip(img.shape[0:2])  # предсказанные ширина и высота
-    for i in range(nums):
-        # Отображаем объекты только из white_list
-        if class_names[int(classes[i])] not in white_list:
-            continue
-
-        # Предсказанные координаты нижнего левого и правого верхнего углов
-        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
-        x2y2 = tuple((np.array(boxes[i][2:4]) * wh).astype(np.int32))
-
-        # Рисуем прямоугольник по двум предсказанным координатам
-        img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 1)
-
-        # Выводим имя класса предсказанного объекта и оценку
-        img = cv2.putText(img, '{} {:.2f}'.format(
-            class_names[int(classes[i])], score[i]),
-                          x1y1, cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 0, 0), 1)
-    return img
-
-
-def detect_objects(yolo, white_list=None):
-    import glob
-    import random
-
-    test_dir = "chess_yolo/test"
-    img_dir = os.path.join(test_dir, '*.jpg')
-    files = glob.glob(img_dir)
-    img_path = random.choice(files)
-
-    image = img_path  # путь к файлу
-    img = tf.image.decode_image(open(image, 'rb').read(), channels=3)  # загружаем изображение как тензор
-
-    img = tf.expand_dims(img, 0)  # добавляем размерность
-    img = preprocess_image(img, settings.SIZE)  # ресайзим изображение
-    boxes, scores, classes, nums = yolo.predict(img)  # делаем предсказание
-    img = cv2.imread(image)  # считываем изображение как картинку, чтобы на нем рисовать
-    # Отрисовываем на картинке предсказанные объекты
-    img = draw_outputs(img, (boxes, scores, classes, nums), settings.CLASS_NAMES, white_list)
-
-    # Сохраняем изображения с предсказанными объектами
-    # cv2.imwrite('detected_{:}'.format(img_path), img)
-    cv2.imwrite('detected_{:}'.format(img_path.split('/')[-1]), img)
-    # Открываем сохраненные изображения и выводим на экран
-    return Image.open('detected_{:}'.format(img_path.split('/')[-1]))
-
-
-
 def broadcast_iou(box_1, box_2):
     # box_1: (..., (x1, y1, x2, y2))
     # box_2: (N, (x1, y1, x2, y2))
@@ -316,8 +265,7 @@ def preprocess_image(x_train, size):
     return (tf.image.resize(x_train, (size, size))) / 255
 
 
-def polygon_to_bbox(line):
-    values = list(map(float, line.strip().split()))
+def polygon_to_bbox(values):
     cls = int(values[0])
     coords = np.array(values[1:]).reshape(-1, 2)
     xmin = coords[:, 0].min()
@@ -350,7 +298,8 @@ def load_yolo_dataset(img_dir, label_dir, img_size=416, max_boxes=20):
         if os.path.exists(label_file):
             with open(label_file) as f:
                 for line in f.readlines():
-                    boxes.append(polygon_to_bbox(line))
+                    values = list(map(float, line.strip().split()))
+                    boxes.append(polygon_to_bbox(values))
 
         # паддинг до max_boxes
         if len(boxes) < max_boxes:
@@ -364,3 +313,101 @@ def load_yolo_dataset(img_dir, label_dir, img_size=416, max_boxes=20):
     y_train = tf.convert_to_tensor(labels, dtype=tf.float32)
 
     return tf.data.Dataset.from_tensor_slices((x_train, y_train))
+
+
+def write_text_to_image(img, text, pos, score=''):
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+
+    # Шрифт с поддержкой кириллицы
+    font = ImageFont.truetype("DejaVuSans.ttf", 13)
+
+    # Рисуем текст
+    draw.text(pos, '{} {:.2f}'.format(text, score), font=font, fill=(0, 0, 0))
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+
+# Функции детекции объектов и отображения предсказанной рамки
+def draw_outputs(img, outputs, class_names, white_list=None):
+    boxes, score, classes, nums = outputs  # распознанные объекты
+    boxes, score, classes, nums = boxes[0], score[0], classes[0], nums[0]
+    wh = np.flip(img.shape[0:2])  # предсказанные ширина и высота
+    for i in range(nums):
+        # Отображаем объекты только из white_list
+        if class_names[int(classes[i])] not in white_list:
+            pass
+            #continue
+
+        # Предсказанные координаты нижнего левого и правого верхнего углов
+        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
+        x2y2 = tuple((np.array(boxes[i][2:4]) * wh).astype(np.int32))
+
+        # Рисуем прямоугольник по двум предсказанным координатам
+        img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 1)
+
+        # Выводим имя класса предсказанного объекта и оценку
+        text = class_names[int(classes[i])]
+
+        img = write_text_to_image(img, text, x1y1, score[i])
+    return img
+
+
+def get_random_image_label():
+    test_dir = "chess_yolo/test"
+    img_dir = os.path.join(test_dir, 'images', '*.jpg')
+    label_dir = os.path.join(test_dir, 'labels')
+    files = glob.glob(img_dir)
+    img_path = random.choice(files)
+
+    label_name = f"{img_path.split('/')[-1].rsplit('.', 1)[0]}.txt"
+    label_path = os.path.join(label_dir, label_name)
+
+    return img_path, label_path
+
+
+def detect_objects(yolo, img_path, white_list=None):
+    image = img_path  # путь к файлу
+    img = tf.image.decode_image(open(image, 'rb').read(), channels=3)  # загружаем изображение как тензор
+
+    img = tf.expand_dims(img, 0)  # добавляем размерность
+    img = preprocess_image(img, settings.SIZE)  # ресайзим изображение
+    boxes, scores, classes, nums = yolo.predict(img)  # делаем предсказание
+    img = cv2.imread(image)  # считываем изображение как картинку, чтобы на нем рисовать
+    # Отрисовываем на картинке предсказанные объекты
+    img = draw_outputs(img, (boxes, scores, classes, nums), settings.CLASS_NAMES, white_list)
+
+    # Сохраняем изображения с предсказанными объектами
+    # cv2.imwrite('detected_{:}'.format(img_path), img)
+    cv2.imwrite('detected_{:}'.format(img_path.split('/')[-1]), img)
+    # Открываем сохраненные изображения и выводим на экран
+    return Image.open('detected_{:}'.format(img_path.split('/')[-1]))
+
+
+def draw_yolo_labels(image_path, label_path, class_names=None):
+    # Загружаем изображение
+    image = image_path  # путь к файлу
+    img = tf.image.decode_image(open(image, 'rb').read(), channels=3)  # загружаем изображение как тензор
+
+    wh = np.flip(img.shape[0:2])
+    # Читаем аннотации
+    with open(label_path, "r") as f:
+        lines = f.readlines()
+
+    img = cv2.imread(image_path)
+    for line in lines:
+        parts = line.strip().split()
+
+        cls_id = int(parts[0])
+        polygon = list(map(float, parts[1:]))
+
+        x1, y1, x2, y2, cls_id = polygon_to_bbox([cls_id] + polygon)
+        x1y1 = tuple((np.array([x1, y1]) * wh).astype(np.int32))
+        x2y2 = tuple((np.array(x2, y2) * wh).astype(np.int32))
+
+        # Рисуем прямоугольник
+        color = (0, 255, 0)
+        img = cv2.rectangle(img, x1y1, x2y2, color, 1)
+        text = class_names[int(cls_id)]
+        img = write_text_to_image(img, text, x1y1, 1.0)
+
+    return img
