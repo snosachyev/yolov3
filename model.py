@@ -115,7 +115,6 @@ def YoloV3(size=None, channels=3, anchors=settings.YOLO_ANCHORS,
            masks=settings.YOLO_ANCHOR_MASKS, classes=80, training=False):
     # Вход
     x = inputs = Input([size, size, channels])
-
     # Модель Darknet с тремя выходами
     Route_1, Route_2, Route_3 = Darknet(name='yolo_darknet')(x)
 
