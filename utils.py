@@ -9,10 +9,7 @@ import tensorflow as tf
 
 import settings
 
-from PIL import Image
-
-# Графики
-from matplotlib import pyplot as plt
+from PIL import Imageпше
 
 
 # функции для загрузки данных
@@ -259,9 +256,8 @@ def detect_objects(yolo, white_list=None):
     # cv2.imwrite('detected_{:}'.format(img_path), img)
     cv2.imwrite('detected_{:}'.format(img_path.split('/')[-1]), img)
     # Открываем сохраненные изображения и выводим на экран
-    detected = Image.open('detected_{:}'.format(img_path.split('/')[-1]))
-    detected.show()
-    plt.imshow(detected)
+    return Image.open('detected_{:}'.format(img_path.split('/')[-1]))
+
 
 
 def broadcast_iou(box_1, box_2):
