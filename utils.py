@@ -382,12 +382,63 @@ def draw_outputs(img, outputs, class_names, white_list=None):
 
         # Рисуем прямоугольник по двум предсказанным координатам
         img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 1)
-
         # Выводим имя класса предсказанного объекта и оценку
         img = cv2.putText(img, '{} {:.2f}'.format(
             class_names[int(classes[i])], score[i]),
             x1y1, cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 0, 0), 1)
     return img
+
+
+from PIL import Image, ImageDraw, ImageFont
+
+
+def draw_outputs_pill(img, outputs, class_names, white_list=None):
+    boxes, score, classes, nums = outputs
+    # Убираем лишние размерности, если они есть (зависит от версии yolo.predict)
+    if len(boxes.shape) > 2:
+        boxes, score, classes, nums = boxes[0], score[0], classes[0], nums[0]
+        
+    wh = np.flip(img.shape[0:2])
+
+    # 1. Сначала рисуем ВСЕ рамки в OpenCV
+    for i in range(nums):
+        class_name = class_names[int(classes[i])]
+        if white_list and class_name not in white_list:
+            continue
+
+        # Координаты (YOLO обычно отдает ymin, xmin, ymax, xmax)
+        # Если у вас x1, y1, x2, y2 — оставьте как было
+        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
+        x2y2 = tuple((np.array(boxes[i][2:4]) * wh).astype(np.int32))
+
+        # Рисуем прямоугольник прямо на исходном img
+        cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 2)
+
+    # 2. Конвертируем img с уже нарисованными рамками в PIL для текста
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+
+    try:
+        # Для Linux: /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf
+        # Для Windows: "arial.ttf"
+        font = ImageFont.truetype("DejaVuSans.ttf", 18) 
+    except:
+        font = ImageFont.load_default()
+
+    # 3. Рисуем текст поверх рамок
+    for i in range(nums):
+        class_name = class_names[int(classes[i])]
+        if white_list and class_name not in white_list:
+            continue
+
+        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
+        text = '{} {:.2f}'.format(class_name, score[i])
+        
+        # Рисуем текст (можно добавить fill=(255, 255, 255) для белого цвета)
+        draw.text(x1y1, text, font=font, fill=(0, 255, 0)) 
+
+    # 4. Возвращаем обратно в OpenCV формат (BGR)
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 
 def get_random_image_label():
@@ -403,28 +454,19 @@ def get_random_image_label():
     return img_path, label_path
 
 
-def detect_objects(yolo, img_path, return_img = True, white_list=None):
+def detect_objects(yolo, img_path, white_list=None, return_img = True):
     image = img_path # путь к файлу
     img = tf.image.decode_image(open(image, 'rb').read(), channels=3) # загружаем изображение как тензор
 
     img = tf.expand_dims(img, 0) # добавляем размерность
     img = preprocess_image(img, settings.SIZE) # ресайзим изображение
+    img = img / 255.0  # ДОБАВЬТЕ ЭТУ СТРОКУ
     boxes, scores, classes, nums = yolo.predict(img) # делаем предсказание
-
     img = cv2.imread(image) # считываем изображение как картинку, чтобы на нем рисовать
     # Отрисовываем на картинке предсказанные объекты
-    img = draw_outputs(img, (boxes, scores, classes, nums), settings.CLASS_NAMES, white_list)
-    if return_img:
-        return img
-    # Сохраняем изображения с предсказанными объектами
-    img_path = 'test.jpg'
-    cv2.imwrite('detected_{:}'.format(img_path), img)
+    return draw_outputs_pill(img, (boxes, scores, classes, nums), settings.CLASS_NAMES, white_list)
 
-    # Открываем сохраненные изображения и выводим на экран
-    detected = Image.open('detected_{:}'.format(img_path))
-    detected.show()
-    plt.title('Предсказанное изображение')
-    plt.imshow(img)
+
 
 
 def draw_yolo_labels(image_path, label_path, class_names=None):
