@@ -6,3 +6,4 @@ __pycache__*
 .ipynb_checkpoints*
 checkpoints
 chess_yolo
+*.h5
