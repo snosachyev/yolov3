@@ -5,6 +5,8 @@ import tensorflow as tf
 import os
 import random
 
+from matplotlib import pyplot as plt
+
 from cProfile import label
 
 import settings
@@ -59,14 +61,12 @@ def make_dataset(img_dir, batch=settings.BATCH_SIZE, shuffle=True):
 
 # Функция преобразования предсказаных значений в рамки (yolo_boxes)
 def yolo_boxes(pred, anchors, classes):
-    # На входе pred размера (S, S, 3, (1+4+classes))
+    # На входе pred размера (S, S, 3, (1+4+80))
 
-    grid_size = tf.shape(pred)[1]  # S ячеек в сетке
+    grid_size = tf.shape(pred)[1] # S ячеек в сетке
 
     # В box_xy и box_wh помещаем сразу по 2 переменные (tx, ty) и (tw, th)
-
-    box_xy, box_wh, score, class_probs = tf.split(pred, (2, 2, 1, classes),
-                                                  axis=-1)  # раскладываем предсказанную карту по переменным
+    box_xy, box_wh, score, class_probs = tf.split(pred, (2, 2, 1, classes), axis=-1) # раскладываем предсказанную карту по переменным
 
     # Применяем сигмоидные функции
     box_xy = tf.sigmoid(box_xy)
@@ -74,19 +74,21 @@ def yolo_boxes(pred, anchors, classes):
     class_probs = tf.sigmoid(class_probs)
     pred_box = tf.concat((box_xy, box_wh), axis=-1)
 
+
     # Построим сетку S x S
     grid = tf.meshgrid(tf.range(grid_size), tf.range(grid_size))
     grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)
 
     # Привяжем box_xy к ячейкам сетки, учтем смещения (и снова нормируем к диапазону 0, 1)
     # Фактически мы вычисляем центральное положение рамки относительно размеров сетки (якорного поля)
-    b_xy = (box_xy + tf.cast(grid, tf.float32)) / tf.cast(grid_size, tf.float32)  # вычисляем b_xy: (bx, by)
+    b_xy = (box_xy + tf.cast(grid, tf.float32)) /  tf.cast(grid_size, tf.float32) # вычисляем b_xy: (bx, by)
 
-    b_wh = tf.exp(box_wh) * anchors  # вычисляем b_wh: (bw, bh), ширина и высота рамки bbox
+    b_wh = tf.exp(box_wh) * anchors # вычисляем b_wh: (bw, bh), ширина и высота рамки bbox
 
     box_x1y1 = b_xy - b_wh / 2
     box_x2y2 = b_xy + b_wh / 2
-    bbox = tf.concat([box_x1y1, box_x2y2], axis=-1)  # задаем рамку bbox, как 2 координаты углов
+    bbox = tf.concat([box_x1y1, box_x2y2], axis=-1) # задаем рамку bbox, как 2 координаты углов
+
 
     return bbox, score, class_probs, pred_box
 
@@ -106,7 +108,7 @@ def nonMaximumSuppression(outputs, anchors, masks, classes):
     confidence = tf.concat(conf, axis=1)
     class_probs = tf.concat(out_type, axis=1)
 
-    scores = confidence * class_probs  # Оценки считаем как произведение оценок объектности на вероятности классов
+    scores = confidence * class_probs # Оценки считаем как произведение оценок объектности на вероятности классов
 
     # Применяем NMS из пакета tensorflow (работаем с документацией, смотрим параметры самостоятельно: https://www.tensorflow.org/api_docs/python/tf/image/combined_non_max_suppression)
     boxes, scores, classes, valid_detections = tf.image.combined_non_max_suppression(
@@ -120,65 +122,54 @@ def nonMaximumSuppression(outputs, anchors, masks, classes):
 
     return boxes, scores, classes, valid_detections
 
-
 # Функция вычисления IoU
 # Функция interval_overlap вычисляет длину пересечения двух отрезков на одной оси (X или Y).
 def interval_overlap(interval_1, interval_2):
-    x1, x2 = interval_1  # координаты начала и конца первого отрезка
-    x3, x4 = interval_2  # координаты начала и конца второго отрезка
-    if tf.reduce_any(x3 < x1):
-        return 0 if tf.reduce_any(x4 < x1) else (tf.minimum(x2, x4) - x1)
+    x1, x2 = interval_1 # координаты начала и конца первого отрезка
+    x3, x4 = interval_2 # координаты начала и конца второго отрезка
+    if x3 < x1:
+        return 0 if x4 < x1 else (min(x2,x4) - x1)
     else:
-        return 0 if tf.reduce_any(x3 < x1) else (tf.minimum(x2, x4) - x3)
-
-
-def intersectionOverUnion(box1, box2):  # box1, box2 - координаты рамки
-    intersect_w = interval_overlap([box1.xmin, box1.xmax], [box2.xmin, box2.xmax])
-    intersect_h = interval_overlap([box1.ymin, box1.ymax], [box2.ymin, box2.ymax])
-    intersect_area = intersect_w * intersect_h
-
-    w1, h1 = box1.xmax - box1.xmin, box1.ymax - box1.ymin
-    w2, h2 = box2.xmax - box2.xmin, box2.ymax - box2.ymin
-
-    union_area = w1 * h1 + w2 * h2 - intersect_area
-    return float(intersect_area) / union_area  # возвращает значение IoU
+        return 0 if x2 < x3 else (min(x2,x4) - x3)
 
 
 def intersectionOverUnion(box1, box2):
-    # box = [xmin, ymin, xmax, ymax]
 
-    box1_0 = box1[..., 0:1]
-    box1_1 = box1[..., 1:2]
-    box1_2 = box1[..., 2:3]
-    box1_3 = box1[..., 3:4]
+    # box format: [xmin, ymin, xmax, ymax]
 
-    box2_0 = box2[..., 0:1]
-    box2_1 = box2[..., 1:2]
-    box2_2 = box2[..., 2:3]
-    box2_3 = box2[..., 3:4]
+    box1 = tf.expand_dims(box1, -2)
+    box2 = tf.expand_dims(box2, 0)
 
-    intersect_w = interval_overlap([box1_0, box1_2], [box2_0, box2_2])
-    intersect_h = interval_overlap([box1_1, box1_3], [box2_1, box2_3])
-    intersect_area = intersect_w * intersect_h
+    intersect_mins = tf.maximum(box1[..., :2], box2[..., :2])
+    intersect_maxes = tf.minimum(box1[..., 2:], box2[..., 2:])
 
-    w1, h1 = box1_2 - box1_0, box1_3 - box1_1
-    w2, h2 = box2_2 - box2_0, box2_3 - box2_1
+    intersect_wh = tf.maximum(intersect_maxes - intersect_mins, 0.0)
+    intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
 
-    union_area = w1 * h1 + w2 * h2 - intersect_area
-    return intersect_area / tf.maximum(union_area, 1e-10)
-    return intersect_area / union_area if union_area > 0 else 0.0
+    box1_area = (
+        (box1[..., 2] - box1[..., 0]) *
+        (box1[..., 3] - box1[..., 1])
+    )
 
-    # union_area = area1[..., tf.newaxis] + area2 - inter_area
-    # iou = inter_area / tf.maximum(union_area, 1e-10)
+    box2_area = (
+        (box2[..., 2] - box2[..., 0]) *
+        (box2[..., 3] - box2[..., 1])
+    )
+
+    union_area = box1_area + box2_area - intersect_area
+
+    return intersect_area / (union_area + 1e-10)
+
 
 
 # Преобразование ограничивающих рамок
 @tf.function
 def transform_targets_for_output(y_true, grid_size, anchor_idxs, classes):
+
     N = tf.shape(y_true)[0]
 
     y_true_out = tf.zeros(
-        (N, grid_size, grid_size, tf.shape(anchor_idxs)[0], 6))
+      (N, grid_size, grid_size, tf.shape(anchor_idxs)[0], 6))
 
     anchor_idxs = tf.cast(anchor_idxs, tf.int32)
 
@@ -197,7 +188,7 @@ def transform_targets_for_output(y_true, grid_size, anchor_idxs, classes):
                 box_xy = (y_true[i][j][0:2] + y_true[i][j][2:4]) / 2
 
                 anchor_idx = tf.cast(tf.where(anchor_eq), tf.int32)
-                grid_xy = tf.cast(box_xy // (1 / grid_size), tf.int32)
+                grid_xy = tf.cast(box_xy // (1/grid_size), tf.int32)
 
                 indexes = indexes.write(
                     idx, [i, grid_xy[1], grid_xy[0], anchor_idx[0][0]])
@@ -208,6 +199,35 @@ def transform_targets_for_output(y_true, grid_size, anchor_idxs, classes):
     return tf.tensor_scatter_nd_update(
         y_true_out, indexes.stack(), updates.stack())
 
+
+def transform_targets(y_train, anchors, anchor_masks, classes):
+    outputs = []
+    grid_size = 13
+
+    anchors = tf.cast(anchors, tf.float32)
+    anchor_area = anchors[..., 0] * anchors[..., 1]
+    box_wh = y_train[..., 2:4] - y_train[..., 0:2]
+    box_wh = tf.tile(tf.expand_dims(box_wh, -2),
+                    (1, 1, tf.shape(anchors)[0], 1))
+    box_area = box_wh[..., 0] * box_wh[..., 1]
+    intersection = tf.minimum(box_wh[..., 0], anchors[..., 0]) * \
+    tf.minimum(box_wh[..., 1], anchors[..., 1])
+    iou = intersection / (box_area + anchor_area - intersection)
+    anchor_idx = tf.cast(tf.argmax(iou, axis=-1), tf.float32)
+    anchor_idx = tf.expand_dims(anchor_idx, axis=-1)
+
+    y_train = tf.concat([y_train, anchor_idx], axis=-1)
+
+    for anchor_idxs in anchor_masks:
+        outputs.append(transform_targets_for_output(
+            y_train, grid_size, anchor_idxs, classes))
+        grid_size *= 2
+
+    return tuple(outputs) # [x, y, w, h, obj, class]
+
+
+def preprocess_image(x_train, size):
+    return (tf.image.resize(x_train, (size, size))) / 255
 
 def broadcast_iou(box_1, box_2):
     # box_1: (..., (x1, y1, x2, y2))
@@ -233,34 +253,6 @@ def broadcast_iou(box_1, box_2):
     return int_area / (box_1_area + box_2_area - int_area)
 
 
-def transform_targets(y_train, anchors, anchor_masks, classes):
-    outputs = []
-    grid_size = 13
-    anchors = tf.cast(anchors, tf.float32)
-    anchor_area = anchors[..., 0] * anchors[..., 1]
-    box_wh = y_train[..., 2:4] - y_train[..., 0:2]
-
-    box_wh = tf.tile(tf.expand_dims(box_wh, -2),
-                     (1, 1, tf.shape(anchors)[0], 1))
-
-    box_area = box_wh[..., 0] * box_wh[..., 1]
-
-    intersection = tf.minimum(box_wh[..., 0], anchors[..., 0]) * \
-                   tf.minimum(box_wh[..., 1], anchors[..., 1])
-    iou = intersection / (box_area + anchor_area - intersection)
-    anchor_idx = tf.cast(tf.argmax(iou, axis=-1), tf.float32)
-    anchor_idx = tf.expand_dims(anchor_idx, axis=-1)
-
-    y_train = tf.concat([y_train, anchor_idx], axis=-1)
-
-    for anchor_idxs in anchor_masks:
-        outputs.append(transform_targets_for_output(
-            y_train, grid_size, anchor_idxs, classes))
-        grid_size *= 2
-
-    return tuple(outputs)  # [x, y, w, h, obj, class]
-
-
 def preprocess_image(x_train, size):
     return (tf.image.resize(x_train, (size, size))) / 255
 
@@ -275,44 +267,91 @@ def polygon_to_bbox(values):
     return [xmin, ymin, xmax, ymax, cls]
 
 
+def preprocess_fn(x, y):
+    return (preprocess_image(x, settings.SIZE), y)
+
+
+def target_fn(x, y):
+    return (
+        x,
+        transform_targets(
+            y,
+            settings.YOLO_ANCHORS,
+            settings.YOLO_ANCHOR_MASKS,
+            settings.NUM_CLASSES
+        )
+    )
+
+
+def build_dataset(img_dir, label_dir):
+
+    train_ds = (
+        load_yolo_dataset(
+            img_dir,
+            label_dir,
+            img_size=settings.SIZE,
+            max_boxes=20
+        )
+        .shuffle(512)
+        .map(preprocess_fn, num_parallel_calls=tf.data.AUTOTUNE)  # preprocess ДО batch
+        #.cache()  # если хватает RAM
+        .batch(settings.BATCH_SIZE)
+        .map(target_fn, num_parallel_calls=tf.data.AUTOTUNE)  # targets ПОСЛЕ batch
+        .prefetch(settings.PREFETCH)
+    )
+
+    return train_ds
+
+
 def load_yolo_dataset(img_dir, label_dir, img_size=416, max_boxes=20):
-    images = []
-    labels = []
+
+    img_paths = []
+    label_paths = []
 
     for img_file in os.listdir(img_dir):
-        if not img_file.endswith((".jpg", ".png", ".jpeg")):
+        if not img_file.endswith((".jpg", ".jpeg", ".png")):
             continue
 
-        # загрузка изображения
-        img_path = os.path.join(img_dir, img_file)
+        img_paths.append(os.path.join(img_dir, img_file))
+        label_paths.append(
+            os.path.join(label_dir, os.path.splitext(img_file)[0] + ".txt")
+        )
+
+    ds = tf.data.Dataset.from_tensor_slices((img_paths, label_paths))
+
+    def parse_fn(img_path, label_path):
+
+        # IMAGE
         img_raw = tf.io.read_file(img_path)
-        img = tf.image.decode_jpeg(img_raw, channels=3)
-        size = np.array([img_size, img_size])
-        img = tf.image.resize(img, size=size)
+        img = tf.image.decode_image(img_raw, channels=3)
+        img.set_shape([None, None, 3])
+        img = tf.image.resize(img, (img_size, img_size))
+        img = tf.cast(img, tf.float32) / 255.0
 
-        images.append(img)
+        # LABELS
+        def load_label_py(path):
+            path = path.numpy().decode("utf-8")  # превращаем tf.Tensor -> bytes -> str
+            boxes = []
+            if os.path.exists(path):
+                with open(path) as f:
+                    for line in f.readlines():
+                        values = list(map(float, line.strip().split()))
+                        boxes.append(polygon_to_bbox(values))
+            if len(boxes) < max_boxes:
+                boxes += [[0,0,0,0,0]] * (max_boxes - len(boxes))
+            else:
+                boxes = boxes[:max_boxes]
+            return np.array(boxes, dtype=np.float32)
 
-        # загрузка и конвертация разметки
-        label_file = os.path.join(label_dir, os.path.splitext(img_file)[0] + ".txt")
-        boxes = []
-        if os.path.exists(label_file):
-            with open(label_file) as f:
-                for line in f.readlines():
-                    values = list(map(float, line.strip().split()))
-                    boxes.append(polygon_to_bbox(values))
+        labels = tf.py_function(load_label_py, [label_path], tf.float32)
+        labels.set_shape([max_boxes, 5])
 
-        # паддинг до max_boxes
-        if len(boxes) < max_boxes:
-            boxes += [[0, 0, 0, 0, 0]] * (max_boxes - len(boxes))
-        else:
-            boxes = boxes[:max_boxes]
+        return img, labels
 
-        labels.append(boxes)
 
-    x_train = tf.convert_to_tensor(images, dtype=tf.float32)
-    y_train = tf.convert_to_tensor(labels, dtype=tf.float32)
+    ds = ds.map(parse_fn, num_parallel_calls=tf.data.AUTOTUNE)
 
-    return tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    return ds
 
 
 def write_text_to_image(img, text, pos, score=''):
@@ -329,14 +368,13 @@ def write_text_to_image(img, text, pos, score=''):
 
 # Функции детекции объектов и отображения предсказанной рамки
 def draw_outputs(img, outputs, class_names, white_list=None):
-    boxes, score, classes, nums = outputs  # распознанные объекты
+    boxes, score, classes, nums = outputs # распознанные объекты
     boxes, score, classes, nums = boxes[0], score[0], classes[0], nums[0]
-    wh = np.flip(img.shape[0:2])  # предсказанные ширина и высота
+    wh = np.flip(img.shape[0:2]) # предсказанные ширина и высота
     for i in range(nums):
         # Отображаем объекты только из white_list
         if class_names[int(classes[i])] not in white_list:
-            pass
-            #continue
+            continue
 
         # Предсказанные координаты нижнего левого и правого верхнего углов
         x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
@@ -346,9 +384,9 @@ def draw_outputs(img, outputs, class_names, white_list=None):
         img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 1)
 
         # Выводим имя класса предсказанного объекта и оценку
-        text = class_names[int(classes[i])]
-
-        img = write_text_to_image(img, text, x1y1, score[i])
+        img = cv2.putText(img, '{} {:.2f}'.format(
+            class_names[int(classes[i])], score[i]),
+            x1y1, cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 0, 0), 1)
     return img
 
 
@@ -365,22 +403,28 @@ def get_random_image_label():
     return img_path, label_path
 
 
-def detect_objects(yolo, img_path, white_list=None):
-    image = img_path  # путь к файлу
-    img = tf.image.decode_image(open(image, 'rb').read(), channels=3)  # загружаем изображение как тензор
+def detect_objects(yolo, img_path, return_img = True, white_list=None):
+    image = img_path # путь к файлу
+    img = tf.image.decode_image(open(image, 'rb').read(), channels=3) # загружаем изображение как тензор
 
-    img = tf.expand_dims(img, 0)  # добавляем размерность
-    img = preprocess_image(img, settings.SIZE)  # ресайзим изображение
-    boxes, scores, classes, nums = yolo.predict(img)  # делаем предсказание
-    img = cv2.imread(image)  # считываем изображение как картинку, чтобы на нем рисовать
+    img = tf.expand_dims(img, 0) # добавляем размерность
+    img = preprocess_image(img, settings.SIZE) # ресайзим изображение
+    boxes, scores, classes, nums = yolo.predict(img) # делаем предсказание
+
+    img = cv2.imread(image) # считываем изображение как картинку, чтобы на нем рисовать
     # Отрисовываем на картинке предсказанные объекты
     img = draw_outputs(img, (boxes, scores, classes, nums), settings.CLASS_NAMES, white_list)
-
+    if return_img:
+        return img
     # Сохраняем изображения с предсказанными объектами
-    # cv2.imwrite('detected_{:}'.format(img_path), img)
-    cv2.imwrite('detected_{:}'.format(img_path.split('/')[-1]), img)
+    img_path = 'test.jpg'
+    cv2.imwrite('detected_{:}'.format(img_path), img)
+
     # Открываем сохраненные изображения и выводим на экран
-    return Image.open('detected_{:}'.format(img_path.split('/')[-1]))
+    detected = Image.open('detected_{:}'.format(img_path))
+    detected.show()
+    plt.title('Предсказанное изображение')
+    plt.imshow(img)
 
 
 def draw_yolo_labels(image_path, label_path, class_names=None):
@@ -411,3 +455,51 @@ def draw_yolo_labels(image_path, label_path, class_names=None):
         img = write_text_to_image(img, text, x1y1, 1.0)
 
     return img
+
+
+def load_darknet_weights(model, weights_file):
+
+    wf = open(weights_file, 'rb') # загружаем файл
+
+    # Читаем из файла по элементам (первые 5, версия файла)
+    major, minor, revision, seen, _ = np.fromfile(wf, dtype=np.int32, count=5)
+    layers = settings.YOLO_V3_LAYERS # слои для загрузки
+
+    for layer_name in layers:
+        sub_model = model.get_layer(layer_name)      # извлекаем блоки слоев из модели по имени
+        for i, layer in enumerate(sub_model.layers): # пробегаемся по отдельным слоям блоков
+            if not layer.name.startswith('conv2d'):  # пропускаем не сверточные слои
+                continue
+            batch_norm = None
+            if i + 1 < len(sub_model.layers) and \
+                sub_model.layers[i + 1].name.startswith('batch_norm'):
+                    batch_norm = sub_model.layers[i + 1]  # фиксируем если за слоем будет батч-нормализация
+
+
+
+            filters = layer.filters                   # фильтров в слое
+            size = layer.kernel_size[0]               # размер ядра в слое
+            #in_dim = layer.input_shape[-1]           # input_shape в слоях Conv2d больше не поддерживается
+            in_dim = layer.get_weights()[0].shape[2]  # входная размерность слоя
+
+            # Вспоминаем структуру DBL: если нет нормализации, то добавляется смещение
+            if batch_norm is None:
+                conv_bias = np.fromfile(wf, dtype=np.float32, count=filters) # считываем веса для смещения
+            else:
+                bn_weights = np.fromfile(wf, dtype=np.float32, count=4*filters) # считываем веса для нормализации
+                bn_weights = bn_weights.reshape((4, filters))[[1, 0, 2, 3]]     # меняем форму
+
+            conv_shape = (filters, in_dim, size, size)    # размерности сверточного слоя
+            conv_weights = np.fromfile(wf, dtype=np.float32, count=np.prod(conv_shape))  # считываем веса для сверточного слоя
+            conv_weights = conv_weights.reshape(conv_shape).transpose([2, 3, 1, 0]) # меняем форму данных весов, решейпим и транспонируем
+
+            # Если нет нормализации, то добавляем веса + смещение
+            if batch_norm is None:
+                layer.set_weights([conv_weights, conv_bias])
+            else:
+                # Если есть нормализации, то добавляем веса в сверточный слой и в следующий за ним слой нормализации
+                layer.set_weights([conv_weights])
+                batch_norm.set_weights(bn_weights)
+
+    assert len(wf.read()) == 0, 'failed to read weights'   # генерируем исключение, если файл не читается
+    wf.close()
