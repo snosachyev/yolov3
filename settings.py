@@ -1,6 +1,7 @@
 import os
 import yaml
 import numpy as np
+import tensorflow as tf
 
 from dotenv import load_dotenv
 
@@ -26,8 +27,20 @@ YOLO_IOU_THRESHOLD = float(os.getenv("YOLO_IOU_THRESHOLD"))
 YOLO_V3_LAYERS = os.getenv("YOLO_V3_LAYERS").split(" ")
 EPOCHS = int(os.getenv("EPOCHS"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE"))
+PREFETCH = int(os.getenv("PREFETCH", tf.data.AUTOTUNE))
 IMG_SIZE = int(os.getenv("IMG_SIZE"))
 CLASS_NAMES = data_cfg["names"]
+COCO_CLASS_NAMES = ["person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck",
+    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+    "banana","apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut",
+    "cake","chair", "sofa", "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop",
+                "mouse","remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator","book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
+
 NUM_CLASSES = len(CLASS_NAMES)
 VAL_PATH = chess_path + data_cfg["val"]
 TRAIN_PATH = chess_path + data_cfg["train"]
